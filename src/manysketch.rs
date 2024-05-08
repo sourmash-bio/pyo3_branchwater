@@ -2,13 +2,15 @@
 use anyhow::{anyhow, Result};
 use rayon::prelude::*;
 
-use crate::utils::{load_fasta_fromfile, sigwriter, Params, ZipMessage};
+use crate::utils::{load_fasta_fromfile, sigwriter, Params, ThreadManager, ZipMessage};
 use camino::Utf8Path as Path;
 use needletail::parse_fastx_file;
 use sourmash::cmd::ComputeParameters;
 use sourmash::signature::Signature;
 use std::sync::atomic;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::Mutex;
 
 fn parse_params_str(params_strs: String) -> Result<Vec<Params>, String> {
     let mut unique_params: std::collections::HashSet<Params> = std::collections::HashSet::new();
@@ -140,11 +142,16 @@ pub fn manysketch(
 
     // set up a multi-producer, single-consumer channel that receives Signature
     let (send, recv) = std::sync::mpsc::sync_channel::<ZipMessage>(rayon::current_num_threads());
-    // need to use Arc so we can write the manifest after all sigs have written
-    let send = std::sync::Arc::new(send);
 
     // & spawn a thread that is dedicated to printing to a buffered output
     let thrd = sigwriter(recv, output);
+
+    // need to use Arc so we can write the manifest after all sigs have written
+    // set up manager to allow for ctrl-c handling
+    let manager = ThreadManager::new(send, thrd);
+
+    // Wrap ThreadManager in Arc<Mutex> for safe sharing across threads
+    let manager_shared = Arc::new(Mutex::new(manager));
 
     // parse param string into params_vec, print error if fail
     let param_result = parse_params_str(param_str);
@@ -164,7 +171,7 @@ pub fn manysketch(
     // set reporting threshold at every 5% or every 1 fasta, whichever is larger)
     let reporting_threshold = std::cmp::max(n_fastas / 20, 1);
 
-    let send_result = fileinfo
+    fileinfo
         .par_iter()
         .filter_map(|fastadata| {
             let name = &fastadata.name;
@@ -187,6 +194,15 @@ pub fn manysketch(
             let last_filename = filenames.last().unwrap();
 
             for filename in filenames {
+                if manager_shared
+                    .lock()
+                    .unwrap()
+                    .interrupted
+                    .load(Ordering::SeqCst)
+                {
+                    println!("Ctrl-C received, signaling shutdown...");
+                    return None; // Early exit if interrupted
+                }
                 // increment processed_fastas counter; make 1-based for % reporting
                 let i = processed_fastas.fetch_add(1, atomic::Ordering::SeqCst);
                 // progress report at threshold
@@ -253,35 +269,22 @@ pub fn manysketch(
             }
             Some(allsigs)
         })
-        .try_for_each_with(
-            send.clone(),
-            |s: &mut std::sync::Arc<std::sync::mpsc::SyncSender<ZipMessage>>, filled_sigs| {
-                if let Err(e) = s.send(ZipMessage::SignatureData(filled_sigs)) {
-                    Err(format!("Unable to send internal data: {:?}", e))
-                } else {
-                    Ok(())
-                }
-            },
-        );
+        .try_for_each_with(manager_shared.clone(), |manager, filled_sigs| {
+            manager
+                .lock()
+                .unwrap()
+                .send(ZipMessage::SignatureData(filled_sigs))
+                .map_err(|e| anyhow!(e))
+        })?;
 
     // After the parallel work, send the WriteManifest message
-    std::sync::Arc::try_unwrap(send)
+    manager_shared
+        .lock()
         .unwrap()
-        .send(ZipMessage::WriteManifest)
-        .unwrap();
+        .send(ZipMessage::WriteManifest)?;
 
     // do some cleanup and error handling -
-    if let Err(e) = send_result {
-        eprintln!("Error during parallel processing: {}", e);
-    }
-
-    // join the writer thread
-    if let Err(e) = thrd
-        .join()
-        .unwrap_or_else(|e| Err(anyhow!("Thread panicked: {:?}", e)))
-    {
-        eprintln!("Error in sigwriter thread: {:?}", e);
-    }
+    manager_shared.lock().unwrap().perform_cleanup();
 
     // done!
     let i: usize = processed_fastas.load(atomic::Ordering::SeqCst);

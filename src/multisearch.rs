@@ -4,10 +4,12 @@ use rayon::prelude::*;
 use sourmash::selection::Selection;
 use sourmash::signature::SigsTrait;
 use std::sync::atomic;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::utils::{
-    csvwriter_thread, load_collection, load_sketches, MultiSearchResult, ReportType,
+    csvwriter_thread, load_collection, load_sketches, MultiSearchResult, ReportType, ThreadManager,
 };
 use sourmash::ani_utils::ani_from_containment;
 
@@ -51,6 +53,11 @@ pub fn multisearch(
     // // & spawn a thread that is dedicated to printing to a buffered output
     let thrd = csvwriter_thread(recv, output);
 
+    // set up manager to allow for ctrl-c handling
+    let manager = ThreadManager::new(send, thrd);
+
+    // Wrap ThreadManager in Arc<Mutex> for safe sharing across threads
+    let manager_shared = Arc::new(Mutex::new(manager));
     //
     // Main loop: iterate (in parallel) over all search signature paths,
     // loading them individually and searching them. Stuff results into
@@ -60,12 +67,21 @@ pub fn multisearch(
     let processed_cmp = AtomicUsize::new(0);
     let ksize = selection.ksize().unwrap() as f64;
 
-    let send = against
+    against
         .par_iter()
         .filter_map(|against| {
             let mut results = vec![];
             // search for matches & save containment.
             for query in queries.iter() {
+                if manager_shared
+                    .lock()
+                    .unwrap()
+                    .interrupted
+                    .load(Ordering::SeqCst)
+                {
+                    println!("Ctrl-C received, signaling shutdown...");
+                    return None; // Early exit if interrupted
+                }
                 let i = processed_cmp.fetch_add(1, atomic::Ordering::SeqCst);
                 if i % 100000 == 0 && i > 0 {
                     eprintln!("Processed {} comparisons", i);
@@ -121,16 +137,12 @@ pub fn multisearch(
             }
         })
         .flatten()
-        .try_for_each_with(send, |s, m| s.send(m));
+        .try_for_each_with(manager_shared.clone(), |manager, result| {
+            manager.lock().unwrap().send(result)
+        })?;
 
     // do some cleanup and error handling -
-    if let Err(e) = send {
-        eprintln!("Unable to send internal data: {:?}", e);
-    }
-
-    if let Err(e) = thrd.join() {
-        eprintln!("Unable to join internal thread: {:?}", e);
-    }
+    manager_shared.lock().unwrap().perform_cleanup();
 
     // done!
     let i: usize = processed_cmp.fetch_max(0, atomic::Ordering::SeqCst);

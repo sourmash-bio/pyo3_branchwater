@@ -15,7 +15,9 @@ use std::fs::{create_dir_all, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::panic;
 use std::sync::atomic;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::mpsc::{SendError, SyncSender};
+use std::sync::Arc;
 
 use sourmash::collection::Collection;
 use sourmash::manifest::{Manifest, Record};
@@ -24,8 +26,59 @@ use sourmash::signature::{Signature, SigsTrait};
 use sourmash::sketch::minhash::KmerMinHash;
 use sourmash::storage::{FSStorage, InnerStorage, SigStore};
 use std::collections::{HashMap, HashSet};
-/// Track a name/minhash.
 
+pub struct ThreadManager<T: Send + 'static> {
+    pub sender: Option<SyncSender<T>>,
+    pub writer_thread: Option<std::thread::JoinHandle<Result<()>>>,
+    pub interrupted: Arc<AtomicBool>,
+}
+
+impl<T: Send + 'static> ThreadManager<T> {
+    pub fn new(sender: SyncSender<T>, writer_thread: std::thread::JoinHandle<Result<()>>) -> Self {
+        let interrupted = Arc::new(AtomicBool::new(false));
+        let interrupted_clone = interrupted.clone();
+
+        // Set up Ctrl-C handling
+        if std::env::var("PYTEST_RUNNING").is_err() {
+            // Only register the Ctrl-C handler if not running with pytest
+            ctrlc::set_handler(move || {
+                println!("Ctrl-C received, signaling shutdown...");
+                interrupted_clone.store(true, atomic::Ordering::SeqCst);
+                // Any additional shutdown logic can go here
+            })
+            .expect("Error setting Ctrl-C handler");
+        }
+
+        ThreadManager {
+            sender: Some(sender),
+            writer_thread: Some(writer_thread),
+            interrupted,
+        }
+    }
+
+    pub fn send(&self, result: T) -> Result<(), SendError<T>> {
+        if let Some(ref sender) = self.sender {
+            sender.send(result)
+        } else {
+            Err(SendError(result)) // send custom error instead?
+        }
+    }
+
+    pub fn perform_cleanup(&mut self) {
+        if let Some(sender) = self.sender.take() {
+            drop(sender); // Close the channel
+        }
+
+        if let Some(thread) = self.writer_thread.take() {
+            match thread.join() {
+                Ok(_) => {}
+                Err(e) => eprintln!("Error joining CSV writer thread: {:?}", e),
+            }
+        }
+    }
+}
+
+/// Track a name/minhash.
 pub struct SmallSignature {
     pub location: String,
     pub name: String,
@@ -999,13 +1052,15 @@ pub struct MultiSearchResult {
     pub max_containment_ani: Option<f64>,
 }
 
-pub fn open_stdout_or_file(output: Option<String>) -> Box<dyn Write + Send + 'static> {
+pub fn open_stdout_or_file(output: Option<String>) -> Result<Box<dyn Write + Send>> {
     // if output is a file, use open_output_file
-    if let Some(path) = output {
-        let outpath: PathBuf = path.into();
-        Box::new(open_output_file(&outpath))
-    } else {
-        Box::new(std::io::stdout())
+    match output {
+        Some(path) => {
+            let path_buf = PathBuf::from(path);
+            let file_writer = open_output_file(&path_buf);
+            Ok(Box::new(file_writer) as Box<dyn Write + Send>)
+        }
+        None => Ok(Box::new(std::io::stdout()) as Box<dyn Write + Send>),
     }
 }
 
@@ -1085,14 +1140,15 @@ pub fn sigwriter(
                 ZipMessage::WriteManifest => {
                     println!("Writing manifest");
                     // Start the CSV file inside the zip
-                    zip.start_file("SOURMASH-MANIFEST.csv", options).unwrap();
+                    zip.start_file("SOURMASH-MANIFEST.csv", options)
+                        .context("Failed to start CSV file in ZIP")?;
                     let manifest: Manifest = manifest_rows.clone().into();
-                    manifest.to_writer(&mut zip)?;
+                    manifest
+                        .to_writer(&mut zip)
+                        .context("Failed to write manifest to ZIP")?;
 
                     // Properly finish writing to the ZIP file
-                    if let Err(e) = zip.finish() {
-                        eprintln!("Error finalizing ZIP file: {:?}", e);
-                    }
+                    zip.finish().context("Error finalizing ZIP file")?;
                 }
             }
         }
@@ -1103,19 +1159,21 @@ pub fn sigwriter(
 pub fn csvwriter_thread<T: Serialize + Send + 'static>(
     recv: std::sync::mpsc::Receiver<T>,
     output: Option<String>,
-) -> std::thread::JoinHandle<()> {
-    // create output file
-    let out = open_stdout_or_file(output);
-    // spawn a thread that is dedicated to printing to a buffered output
-    std::thread::spawn(move || {
+) -> std::thread::JoinHandle<Result<()>> {
+    std::thread::spawn(move || -> Result<()> {
+        let out = open_stdout_or_file(output)?;
         let mut writer = Writer::from_writer(out);
 
         for res in recv.iter() {
-            if let Err(e) = writer.serialize(res) {
-                eprintln!("Error writing item: {:?}", e);
-            }
+            writer
+                .serialize(&res)
+                .map_err(|e| anyhow!("Error writing item: {:?}", e))?;
         }
-        writer.flush().expect("Failed to flush writer.");
+        writer
+            .flush()
+            .map_err(|e| anyhow!("Failed to flush writer: {:?}", e))?;
+
+        Ok(())
     })
 }
 

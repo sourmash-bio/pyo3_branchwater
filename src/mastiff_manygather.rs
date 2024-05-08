@@ -6,10 +6,13 @@ use sourmash::index::revindex::{RevIndex, RevIndexOps};
 use sourmash::prelude::*;
 use sourmash::signature::SigsTrait;
 use std::sync::atomic;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::utils::{
     csvwriter_thread, is_revindex_database, load_collection, BranchwaterGatherResult, ReportType,
+    ThreadManager,
 };
 
 pub fn mastiff_manygather(
@@ -41,6 +44,12 @@ pub fn mastiff_manygather(
     // & spawn a thread that is dedicated to printing to a buffered output
     let thrd = csvwriter_thread(recv, output);
 
+    // set up manager to allow for ctrl-c handling
+    let manager = ThreadManager::new(send, thrd);
+
+    // Wrap ThreadManager in Arc<Mutex> for safe sharing across threads
+    let manager_shared = Arc::new(Mutex::new(manager));
+
     //
     // Main loop: iterate (in parallel) over all search signature paths,
     // loading them individually and searching them. Stuff results into
@@ -51,11 +60,20 @@ pub fn mastiff_manygather(
     let skipped_paths = AtomicUsize::new(0);
     let failed_paths = AtomicUsize::new(0);
 
-    let send = query_collection
+    query_collection
         .par_iter()
         .filter_map(|(_idx, record)| {
             let threshold = threshold_bp / selection.scaled()? as usize;
             let ksize = selection.ksize()?;
+            if manager_shared
+                .lock()
+                .unwrap()
+                .interrupted
+                .load(Ordering::SeqCst)
+            {
+                println!("Ctrl-C received, signaling shutdown...");
+                return None; // Early exit if interrupted
+            }
 
             // query downsampling happens here
             match query_collection.sig_from_record(record) {
@@ -145,16 +163,12 @@ pub fn mastiff_manygather(
             }
         })
         .flatten()
-        .try_for_each_with(send, |s, m| s.send(m));
+        .try_for_each_with(manager_shared.clone(), |manager, result| {
+            manager.lock().unwrap().send(result)
+        })?;
 
     // do some cleanup and error handling -
-    if let Err(e) = send {
-        eprintln!("Unable to send internal data: {:?}", e);
-    }
-
-    if let Err(e) = thrd.join() {
-        eprintln!("Unable to join internal thread: {:?}", e);
-    }
+    manager_shared.lock().unwrap().perform_cleanup();
 
     // done!
     let i: usize = processed_sigs.fetch_max(0, atomic::Ordering::SeqCst);

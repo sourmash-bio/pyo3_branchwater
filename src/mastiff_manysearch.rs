@@ -3,15 +3,18 @@ use anyhow::Result;
 use camino::Utf8PathBuf as PathBuf;
 use rayon::prelude::*;
 use std::sync::atomic;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use sourmash::ani_utils::ani_from_containment;
 use sourmash::index::revindex::{RevIndex, RevIndexOps};
 use sourmash::selection::Selection;
 use sourmash::signature::SigsTrait;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::utils::{
     csvwriter_thread, is_revindex_database, load_collection, ReportType, SearchResult,
+    ThreadManager,
 };
 
 pub fn mastiff_manysearch(
@@ -44,6 +47,12 @@ pub fn mastiff_manysearch(
     // & spawn a thread that is dedicated to printing to a buffered output
     let thrd = csvwriter_thread(recv, output);
 
+    // set up manager to allow for ctrl-c handling
+    let manager = ThreadManager::new(send, thrd);
+
+    // Wrap ThreadManager in Arc<Mutex> for safe sharing across threads
+    let manager_shared = Arc::new(Mutex::new(manager));
+
     //
     // Main loop: iterate (in parallel) over all search signature paths,
     // loading them individually and searching them. Stuff results into
@@ -54,14 +63,22 @@ pub fn mastiff_manysearch(
     let skipped_paths = AtomicUsize::new(0);
     let failed_paths = AtomicUsize::new(0);
 
-    let send_result = query_collection
+    query_collection
         .par_iter()
         .filter_map(|(_idx, record)| {
             let i = processed_sigs.fetch_add(1, atomic::Ordering::SeqCst);
             if i % 1000 == 0 && i > 0 {
                 eprintln!("Processed {} search sigs", i);
             }
-
+            if manager_shared
+                .lock()
+                .unwrap()
+                .interrupted
+                .load(Ordering::SeqCst)
+            {
+                println!("Ctrl-C received, signaling shutdown...");
+                return None; // Early exit if interrupted
+            }
             let mut results = vec![];
             // query downsample happens here
             match query_collection.sig_from_record(record) {
@@ -122,23 +139,12 @@ pub fn mastiff_manysearch(
             }
         })
         .flatten()
-        .try_for_each_with(send, |s, results| {
-            if let Err(e) = s.send(results) {
-                Err(format!("Unable to send internal data: {:?}", e))
-            } else {
-                Ok(())
-            }
-        });
+        .try_for_each_with(manager_shared.clone(), |manager, result| {
+            manager.lock().unwrap().send(result)
+        })?;
 
     // do some cleanup and error handling -
-    if let Err(e) = send_result {
-        eprintln!("Error during parallel processing: {}", e);
-    }
-
-    // join the writer thread
-    if let Err(e) = thrd.join() {
-        eprintln!("Unable to join internal thread: {:?}", e);
-    }
+    manager_shared.lock().unwrap().perform_cleanup();
 
     // done!
     let i: usize = processed_sigs.fetch_max(0, atomic::Ordering::SeqCst);

@@ -3,9 +3,11 @@ use anyhow::Result;
 use rayon::prelude::*;
 use std::sync::atomic;
 use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::utils::{
-    csvwriter_thread, load_collection, load_sketches, MultiSearchResult, ReportType,
+    csvwriter_thread, load_collection, load_sketches, MultiSearchResult, ReportType, ThreadManager,
 };
 use sourmash::ani_utils::ani_from_containment;
 use sourmash::selection::Selection;
@@ -47,6 +49,12 @@ pub fn pairwise(
     // // & spawn a thread that is dedicated to printing to a buffered output
     let thrd = csvwriter_thread(recv, output);
 
+    // set up manager to allow for ctrl-c handling
+    let manager = ThreadManager::new(send, thrd);
+
+    // Wrap ThreadManager in Arc<Mutex> for safe sharing across threads
+    let manager_shared = Arc::new(Mutex::new(manager));
+
     //
     // Main loop: iterate (in parallel) over all signature,
     // Results written to the writer thread above.
@@ -55,8 +63,19 @@ pub fn pairwise(
     let ksize = selection.ksize().unwrap() as f64;
 
     sketches.par_iter().enumerate().for_each(|(idx, query)| {
+        // Clone the Arc to get a new reference for this thread
+        let manager_clone = manager_shared.clone();
         let mut has_written_comparison = false;
         for against in sketches.iter().skip(idx + 1) {
+            if manager_shared
+                .lock()
+                .unwrap()
+                .interrupted
+                .load(atomic::Ordering::SeqCst)
+            {
+                println!("Ctrl-C received, signaling shutdown...");
+                return; // Early return to stop processing further
+            }
             let overlap = query.minhash.count_common(&against.minhash, false).unwrap() as f64;
             let query1_size = query.minhash.size() as f64;
             let query2_size = against.minhash.size() as f64;
@@ -82,21 +101,24 @@ pub fn pairwise(
                     average_containment_ani = Some((qani + mani) / 2.);
                     max_containment_ani = Some(f64::max(qani, mani));
                 }
-                send.send(MultiSearchResult {
-                    query_name: query.name.clone(),
-                    query_md5: query.md5sum.clone(),
-                    match_name: against.name.clone(),
-                    match_md5: against.md5sum.clone(),
-                    containment: containment_q1_in_q2,
-                    max_containment,
-                    jaccard,
-                    intersect_hashes: overlap,
-                    query_containment_ani,
-                    match_containment_ani,
-                    average_containment_ani,
-                    max_containment_ani,
-                })
-                .unwrap();
+                manager_clone
+                    .lock()
+                    .unwrap()
+                    .send(MultiSearchResult {
+                        query_name: query.name.clone(),
+                        query_md5: query.md5sum.clone(),
+                        match_name: against.name.clone(),
+                        match_md5: against.md5sum.clone(),
+                        containment: containment_q1_in_q2,
+                        max_containment,
+                        jaccard,
+                        intersect_hashes: overlap,
+                        query_containment_ani,
+                        match_containment_ani,
+                        average_containment_ani,
+                        max_containment_ani,
+                    })
+                    .unwrap()
             }
 
             let i = processed_cmp.fetch_add(1, atomic::Ordering::SeqCst);
@@ -117,30 +139,29 @@ pub fn pairwise(
                 max_containment_ani = Some(1.0);
             }
 
-            send.send(MultiSearchResult {
-                query_name: query.name.clone(),
-                query_md5: query.md5sum.clone(),
-                match_name: query.name.clone(),
-                match_md5: query.md5sum.clone(),
-                containment: 1.0,
-                max_containment: 1.0,
-                jaccard: 1.0,
-                intersect_hashes: query.minhash.size() as f64,
-                query_containment_ani,
-                match_containment_ani,
-                average_containment_ani,
-                max_containment_ani,
-            })
-            .unwrap();
+            manager_clone
+                .lock()
+                .unwrap()
+                .send(MultiSearchResult {
+                    query_name: query.name.clone(),
+                    query_md5: query.md5sum.clone(),
+                    match_name: query.name.clone(),
+                    match_md5: query.md5sum.clone(),
+                    containment: 1.0,
+                    max_containment: 1.0,
+                    jaccard: 1.0,
+                    intersect_hashes: query.minhash.size() as f64,
+                    query_containment_ani,
+                    match_containment_ani,
+                    average_containment_ani,
+                    max_containment_ani,
+                })
+                .unwrap()
         }
     });
 
     // do some cleanup and error handling -
-    drop(send); // close the channel
-
-    if let Err(e) = thrd.join() {
-        eprintln!("Unable to join internal thread: {:?}", e);
-    }
+    manager_shared.lock().unwrap().perform_cleanup();
 
     // done!
     let i: usize = processed_cmp.load(atomic::Ordering::SeqCst);
