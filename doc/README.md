@@ -10,6 +10,7 @@
 | `pairwise` | Multithreaded pairwise comparison of multiple sketches, in memory | [link](#Running-multisearch-and-pairwise)
 | `cluster` | cluster sequences based on similarity data from `pairwise` or `multisearch` | [link](#Running-cluster)
 | `index` | build a RocksDB inverted index for efficient containment queries | [link](#Running-index)
+| `sigcat` | concatenate signatures to a zipfile | [link](#Running-sigcat) |
 
 This repository implements multithreaded plugins for
 [sourmash](https://sourmash.readthedocs.io/) that provide very fast
@@ -383,6 +384,18 @@ Note that RocksDB indexes are implemented in the core
 [sourmash Rust library](https://crates.io/crates/sourmash), and
 used in downstream software packages (this plugin, and
 [the branchwater application code](https://github.com/sourmash-bio/branchwater)).  The above documentation applies to sourmash core v0.15.0.
+
+### Running `sigcat`
+
+The `sigcat` command combines signatures into a single sourmash Zipfile. It's equivalent `sourmash` command is `sourmash sig cat`.
+
+For example:
+```
+sourmash scripts sigcat file1.sig file2.sig -o all.zip
+```
+will combine all signatures in `file1.sig` and `file2.sig` and put them in the file `all.zip`.
+
+`sigcat` can be used to select out specific signatures as well, by `ksize`, `moltype`, and `scaled`, where signatures will be downsampled to the desired scaled.
 
 ## Notes on concurrency and efficiency
 

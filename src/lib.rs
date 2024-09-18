@@ -18,6 +18,7 @@ mod mastiff_manygather;
 mod mastiff_manysearch;
 mod multisearch;
 mod pairwise;
+mod sigcat;
 
 use camino::Utf8PathBuf as PathBuf;
 
@@ -33,7 +34,7 @@ fn do_manysearch(
     output_path: Option<String>,
 ) -> anyhow::Result<u8> {
     let againstfile_path: PathBuf = siglist_path.clone().into();
-    let selection = build_selection(ksize, scaled, &moltype);
+    let selection = build_selection(Some(ksize), Some(scaled), Some(&moltype));
     eprintln!("selection scaled: {:?}", selection.scaled());
     let allow_failed_sigpaths = true;
 
@@ -84,7 +85,7 @@ fn do_fastgather(
     output_path_prefetch: Option<String>,
     output_path_gather: Option<String>,
 ) -> anyhow::Result<u8> {
-    let selection = build_selection(ksize, scaled, &moltype);
+    let selection = build_selection(Some(ksize), Some(scaled), Some(&moltype));
     let allow_failed_sigpaths = true;
 
     match fastgather::fastgather(
@@ -119,7 +120,7 @@ fn do_fastmultigather(
     create_empty_results: bool,
 ) -> anyhow::Result<u8> {
     let againstfile_path: camino::Utf8PathBuf = siglist_path.clone().into();
-    let selection = build_selection(ksize, scaled, &moltype);
+    let selection = build_selection(Some(ksize), Some(scaled), Some(&moltype));
     let allow_failed_sigpaths = true;
 
     // if a siglist path is a revindex, run mastiff_manygather. If not, run multigather
@@ -188,7 +189,7 @@ fn do_index(
     colors: bool,
     use_internal_storage: bool,
 ) -> anyhow::Result<u8> {
-    let selection = build_selection(ksize, scaled, &moltype);
+    let selection = build_selection(Some(ksize), Some(scaled), Some(&moltype));
     let allow_failed_sigpaths = false;
     match index::index(
         siglist,
@@ -231,7 +232,7 @@ fn do_multisearch(
     estimate_ani: bool,
     output_path: Option<String>,
 ) -> anyhow::Result<u8> {
-    let selection = build_selection(ksize, scaled, &moltype);
+    let selection = build_selection(Some(ksize), Some(scaled), Some(&moltype));
     let allow_failed_sigpaths = true;
 
     match multisearch::multisearch(
@@ -264,7 +265,7 @@ fn do_pairwise(
     write_all: bool,
     output_path: Option<String>,
 ) -> anyhow::Result<u8> {
-    let selection = build_selection(ksize, scaled, &moltype);
+    let selection = build_selection(Some(ksize), Some(scaled), Some(&moltype));
     let allow_failed_sigpaths = true;
     match pairwise::pairwise(
         siglist_path,
@@ -324,6 +325,33 @@ fn do_cluster(
     }
 }
 
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn do_sigcat(
+    sigfiles: String,
+    output_path: String,
+    force: bool,
+    ksize: Option<u8>,
+    scaled: Option<usize>,
+    moltype: Option<String>,
+) -> anyhow::Result<u8> {
+    let selection = build_selection(ksize, scaled, moltype.as_deref());
+    let allow_failed_sigpaths = true;
+    match sigcat::sig_cat(
+        sigfiles,
+        &selection,
+        allow_failed_sigpaths,
+        output_path,
+        force,
+    ) {
+        Ok(_) => Ok(0),
+        Err(e) => {
+            eprintln!("Error: {e}");
+            Ok(1)
+        }
+    }
+}
+
 #[pymodule]
 fn sourmash_plugin_branchwater(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(do_manysearch, m)?)?;
@@ -336,5 +364,6 @@ fn sourmash_plugin_branchwater(_py: Python, m: &Bound<'_, PyModule>) -> PyResult
     m.add_function(wrap_pyfunction!(do_multisearch, m)?)?;
     m.add_function(wrap_pyfunction!(do_pairwise, m)?)?;
     m.add_function(wrap_pyfunction!(do_cluster, m)?)?;
+    m.add_function(wrap_pyfunction!(do_sigcat, m)?)?;
     Ok(())
 }

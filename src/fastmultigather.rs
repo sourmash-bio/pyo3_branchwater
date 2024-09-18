@@ -34,12 +34,14 @@ pub fn fastmultigather(
     save_matches: bool,
     create_empty_results: bool,
 ) -> Result<()> {
+    let allow_empty_collection = false;
     // load query collection
     let query_collection = load_collection(
         &query_filepath,
         selection,
         ReportType::Query,
         allow_failed_sigpaths,
+        allow_empty_collection,
     )?;
 
     let threshold_hashes: u64 = {
@@ -61,6 +63,7 @@ pub fn fastmultigather(
         selection,
         ReportType::Against,
         allow_failed_sigpaths,
+        allow_empty_collection,
     )?;
     // load against sketches into memory, downsampling on the way
     let against = load_sketches(against_collection, selection, ReportType::Against).unwrap();

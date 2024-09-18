@@ -24,12 +24,14 @@ pub fn pairwise(
     write_all: bool,
     output: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let allow_empty_collection = false;
     // Load all sigs into memory at once.
     let collection = load_collection(
         &siglist,
         selection,
         ReportType::General,
         allow_failed_sigpaths,
+        allow_empty_collection,
     )?;
 
     if collection.len() <= 1 {

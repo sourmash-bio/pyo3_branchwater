@@ -31,6 +31,7 @@ check = "sourmash_plugin_branchwater:Branchwater_Check"
 manysketch = "sourmash_plugin_branchwater:Branchwater_Manysketch"
 pairwise = "sourmash_plugin_branchwater:Branchwater_Pairwise"
 cluster = "sourmash_plugin_branchwater:Branchwater_Cluster"
+sigcat = "sourmash_plugin_branchwater:Branchwater_SigCat"
 
 [project.optional-dependencies]
 test = [

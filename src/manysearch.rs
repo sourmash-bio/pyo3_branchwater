@@ -22,12 +22,14 @@ pub fn manysearch(
     output: Option<String>,
     allow_failed_sigpaths: bool,
 ) -> Result<()> {
+    let allow_empty_collection = false;
     // Load query collection
     let query_collection = load_collection(
         &query_filepath,
         selection,
         ReportType::Query,
         allow_failed_sigpaths,
+        allow_empty_collection,
     )?;
     // load all query sketches into memory, downsampling on the way
     let query_sketchlist = load_sketches(query_collection, selection, ReportType::Query).unwrap();
@@ -38,6 +40,7 @@ pub fn manysearch(
         selection,
         ReportType::Against,
         allow_failed_sigpaths,
+        allow_empty_collection,
     )?;
 
     // set up a multi-producer, single-consumer channel.

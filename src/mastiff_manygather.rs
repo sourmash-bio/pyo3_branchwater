@@ -20,6 +20,7 @@ pub fn mastiff_manygather(
     output: Option<String>,
     allow_failed_sigpaths: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let allow_empty_collection = false;
     if !is_revindex_database(&index) {
         bail!("'{}' is not a valid RevIndex database", index);
     }
@@ -32,6 +33,7 @@ pub fn mastiff_manygather(
         selection,
         ReportType::Query,
         allow_failed_sigpaths,
+        allow_empty_collection,
     )?;
 
     // set up a multi-producer, single-consumer channel.

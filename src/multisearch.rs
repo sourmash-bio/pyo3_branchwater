@@ -25,6 +25,7 @@ pub fn multisearch(
     estimate_ani: bool,
     output: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let allow_empty_collection = false;
     // Load all queries into memory at once.
 
     let query_collection = load_collection(
@@ -32,6 +33,7 @@ pub fn multisearch(
         selection,
         ReportType::Query,
         allow_failed_sigpaths,
+        allow_empty_collection,
     )?;
     let queries = load_sketches(query_collection, selection, ReportType::Query).unwrap();
 
@@ -41,6 +43,7 @@ pub fn multisearch(
         selection,
         ReportType::Against,
         allow_failed_sigpaths,
+        allow_empty_collection,
     )?;
     let against = load_sketches(against_collection, selection, ReportType::Against).unwrap();
 

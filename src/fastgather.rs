@@ -19,11 +19,13 @@ pub fn fastgather(
     prefetch_output: Option<String>,
     allow_failed_sigpaths: bool,
 ) -> Result<()> {
+    let allow_empty_collection = false;
     let query_collection = load_collection(
         &query_filepath,
         selection,
         ReportType::Query,
         allow_failed_sigpaths,
+        allow_empty_collection,
     )?;
 
     if query_collection.len() != 1 {
@@ -47,6 +49,7 @@ pub fn fastgather(
         selection,
         ReportType::Against,
         allow_failed_sigpaths,
+        allow_empty_collection,
     )?;
 
     // calculate the minimum number of hashes based on desired threshold

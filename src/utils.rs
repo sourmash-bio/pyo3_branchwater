@@ -662,6 +662,7 @@ pub fn load_collection(
     selection: &Selection,
     report_type: ReportType,
     allow_failed: bool,
+    allow_empty: bool,
 ) -> Result<Collection> {
     let sigpath = PathBuf::from(siglist);
 
@@ -727,6 +728,7 @@ pub fn load_collection(
                 n_failed,
                 report_type,
                 allow_failed,
+                allow_empty,
             )?;
             Ok(selected)
         }
@@ -771,6 +773,7 @@ pub fn report_on_collection_loading(
     failed_paths: usize,
     report_type: ReportType,
     allow_failed: bool,
+    allow_empty: bool,
 ) -> Result<()> {
     if failed_paths > 0 {
         eprintln!(
@@ -789,7 +792,7 @@ pub fn report_on_collection_loading(
     }
 
     // Validate sketches
-    if collection.is_empty() {
+    if !allow_empty && collection.is_empty() {
         bail!("No {} signatures loaded, exiting.", report_type);
     }
     eprintln!("Loaded {} {} signature(s)", collection.len(), report_type);
@@ -1089,23 +1092,33 @@ pub fn consume_query_by_gather(
     Ok(())
 }
 
-pub fn build_selection(ksize: u8, scaled: usize, moltype: &str) -> Selection {
-    let hash_function = match moltype {
-        "DNA" => HashFunctions::Murmur64Dna,
-        "protein" => HashFunctions::Murmur64Protein,
-        "dayhoff" => HashFunctions::Murmur64Dayhoff,
-        "hp" => HashFunctions::Murmur64Hp,
-        _ => panic!("Unknown molecule type: {}", moltype),
-    };
-    // let hash_function = HashFunctions::try_from(moltype)
-    //     .map_err(|_| panic!("Unknown molecule type: {}", moltype))
-    //     .unwrap();
+pub fn build_selection(
+    ksize: Option<u8>,
+    scaled: Option<usize>,
+    moltype: Option<&str>,
+) -> Selection {
+    let mut selection = Selection::default();
 
-    Selection::builder()
-        .ksize(ksize.into())
-        .scaled(scaled as u32)
-        .moltype(hash_function)
-        .build()
+    if let Some(ksize_value) = ksize {
+        selection.set_ksize(ksize_value as u32);
+    }
+
+    if let Some(scaled_value) = scaled {
+        selection.set_scaled(scaled_value as u32);
+    }
+
+    if let Some(moltype_value) = moltype {
+        let hash_function = match moltype_value {
+            "dna" => HashFunctions::Murmur64Dna,
+            "protein" => HashFunctions::Murmur64Protein,
+            "dayhoff" => HashFunctions::Murmur64Dayhoff,
+            "hp" => HashFunctions::Murmur64Hp,
+            _ => panic!("Unknown molecule type: {}", moltype_value),
+        };
+        selection.set_moltype(hash_function);
+    }
+
+    selection
 }
 
 pub fn is_revindex_database(path: &camino::Utf8PathBuf) -> bool {
