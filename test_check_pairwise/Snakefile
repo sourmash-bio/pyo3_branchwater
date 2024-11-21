@@ -1,0 +1,51 @@
+COLNAME='average_containment_ani'
+COMPARE_ANI_ARGS='--ani --avg-containment'
+
+rule all:
+    input:
+        "pairwise-vs-mat.txt",
+        "mat-vs-pairwise.txt"
+
+rule compare_txt:
+    input:
+        pairwise="64sketches.pairwise.csv",
+        mat="64sketches.mat.csv",
+        script="compare_pairwise_csv.py",
+    output:
+        txt="pairwise-vs-mat.txt",
+        txt2="mat-vs-pairwise.txt"
+    shell: """
+        ./compare_pairwise_csv.py {input.mat} {input.pairwise} -u {COLNAME} -R 8 | tee {output.txt}
+        ./compare_pairwise_csv.py {input.pairwise} {input.mat} -u {COLNAME} -R 8 | tee {output.txt2}
+    """
+
+rule make_pairwise:
+    input:
+        "64sketches.sig.zip"
+    output:
+        "64sketches.pairwise.csv"
+    shell: """
+        sourmash scripts pairwise --write-all {input} -o {output} --ani -t 0
+    """
+
+rule make_mat:
+    input:
+        sig="64sketches.sig.zip",
+    output:
+        cmp="64sketches.cmp",
+        txt="64sketches.cmp.labels.txt",
+        labels="64sketches.labels.csv",
+    shell: """
+       sourmash compare {input.sig} -o {output.cmp} {COMPARE_ANI_ARGS} --labels-to {output.labels}
+    """
+
+rule mat_to_pair:
+    input:
+        cmp="64sketches.cmp",
+        labels="64sketches.labels.csv",
+        script="matrix_to_pairwise.py",
+    output:
+        csv="64sketches.mat.csv"
+    shell: """
+       ./matrix_to_pairwise.py {input.cmp} {input.labels} -o {output.csv} -u {COLNAME}
+    """
