@@ -41,3 +41,4 @@ tempfile = "3.14.0"
 #target-cpu=native
 #lto = "thin"
 opt-level = 3
+debug = true

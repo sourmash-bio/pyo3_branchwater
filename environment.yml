@@ -12,3 +12,4 @@ dependencies:
     - pandas
     - compilers
     - clang
+    - python=3.13
