@@ -222,9 +222,9 @@ fn do_index(
 }
 
 #[pyfunction]
-fn do_check(index: String, quick: bool) -> anyhow::Result<u8> {
+fn do_check(index: String, quick: bool, rw: bool) -> anyhow::Result<u8> {
     let idx: PathBuf = index.into();
-    match check::check(idx, quick) {
+    match check::check(idx, quick, rw) {
         Ok(_) => Ok(0),
         Err(e) => {
             eprintln!("Error: {e}");

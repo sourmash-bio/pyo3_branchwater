@@ -2175,3 +2175,113 @@ def test_explicit_scaled(runtmp, indexed):
     assert len(df) == 3
     assert set(list(df["scaled"])) == {150_000}
     assert round(df["f_unique_to_query"].sum(), 6) == round(0.01836514223, 6)
+
+
+def test_rocksdb_v0_9_5(runtmp):
+    # there was a RevIndex format change between this plugin v0.9.5 and
+    # v0.9.12; test that databases can be opened etc.
+
+    sig2 = get_test_data("2.fa.sig.gz")
+
+    rocksdb_dir = get_test_data("rocksdb/podar-ref-subset.branch0_9_5.rocksdb")
+    rocksdb_zip = get_test_data("rocksdb/podar-ref-subset.sig.zip")
+
+    target_rocksdb = runtmp.output("podar-ref-subset.branch0_9_5.rocksdb")
+    target_zip = runtmp.output("podar-ref-subset.sig.zip")
+    shutil.copytree(rocksdb_dir, runtmp.output(target_rocksdb))
+    shutil.copyfile(rocksdb_zip, target_zip)
+
+    # fails b/c Column family not found: storage
+    with pytest.raises(utils.SourmashCommandFailed):
+        runtmp.sourmash(
+            "scripts",
+            "fastmultigather",
+            sig2,
+            "podar-ref-subset.branch0_9_5.rocksdb",
+            "-o",
+            "out.csv",
+            "-s",
+            "100_000",
+            in_dir=runtmp.output(""),
+        )
+
+    # upgrade with 'check'
+    runtmp.sourmash(
+        "scripts",
+        "check",
+        "--upgrade",
+        "podar-ref-subset.branch0_9_5.rocksdb",
+        in_dir=runtmp.output(""),
+    )
+
+    # should now work...
+    runtmp.sourmash(
+        "scripts",
+        "fastmultigather",
+        sig2,
+        "podar-ref-subset.branch0_9_5.rocksdb",
+        "-o",
+        "out.csv",
+        "-s",
+        "100_000",
+        in_dir=runtmp.output(""),
+    )
+
+
+def test_rocksdb_v0_9_13_internal(runtmp):
+    # test that databases created with v0.9.13 w/internal storage can be
+    # opened/searched.
+    sig2 = get_test_data("2.fa.sig.gz")
+
+    rocksdb_dir = get_test_data(
+        "rocksdb/podar-ref-subset.branch0_9_13.internal.rocksdb"
+    )
+
+    # no need to copy zip file: internal storage
+    target_rocksdb = runtmp.output("podar-ref-subset.branch0_9_13.internal.rocksdb")
+    shutil.copytree(rocksdb_dir, runtmp.output(target_rocksdb))
+
+    runtmp.sourmash(
+        "scripts",
+        "fastmultigather",
+        sig2,
+        "podar-ref-subset.branch0_9_13.internal.rocksdb",
+        "-o",
+        "out.csv",
+        "-s",
+        "100_000",
+        in_dir=runtmp.output(""),
+    )
+
+    assert os.path.exists(runtmp.output("out.csv"))
+
+
+def test_rocksdb_v0_9_13_external(runtmp):
+    # test that databases created with v0.9.13 w/xternal storage can be
+    # opened/searched.
+    sig2 = get_test_data("2.fa.sig.gz")
+
+    rocksdb_dir = get_test_data(
+        "rocksdb/podar-ref-subset.branch0_9_13.external.rocksdb"
+    )
+    rocksdb_zip = get_test_data("rocksdb/podar-ref-subset.sig.zip")
+
+    # note: copy zipfile b/c external storage.
+    target_rocksdb = runtmp.output("podar-ref-subset.branch0_9_13.external.rocksdb")
+    target_zip = runtmp.output("podar-ref-subset.sig.zip")
+    shutil.copytree(rocksdb_dir, runtmp.output(target_rocksdb))
+    shutil.copyfile(rocksdb_zip, target_zip)
+
+    runtmp.sourmash(
+        "scripts",
+        "fastmultigather",
+        sig2,
+        "podar-ref-subset.branch0_9_13.external.rocksdb",
+        "-o",
+        "out.csv",
+        "-s",
+        "100_000",
+        in_dir=runtmp.output(""),
+    )
+
+    assert os.path.exists(runtmp.output("out.csv"))

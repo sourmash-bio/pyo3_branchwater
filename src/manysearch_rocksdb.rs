@@ -1,7 +1,6 @@
 /// manysearch_rocksdb: rocksdb-indexed version of manysearch.
 use anyhow::Result;
 use camino::Utf8PathBuf as PathBuf;
-use log::debug;
 use rayon::prelude::*;
 use std::sync::atomic;
 use std::sync::atomic::AtomicUsize;
@@ -30,9 +29,17 @@ pub fn manysearch_rocksdb(
     if !is_revindex_database(&index) {
         bail!("'{}' is not a valid RevIndex database", index);
     }
+
     // Open database once
-    debug!("Opened revindex: '{index}')");
-    let db = RevIndex::open(index, true, None)?;
+    let db = match RevIndex::open(index, true, None) {
+        Ok(db) => db,
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "cannot open RocksDB database. Error is: {}",
+                e
+            ))
+        }
+    };
 
     println!("Loaded DB");
 

@@ -551,3 +551,42 @@ def test_index_misnamed_zipfile(runtmp, capfd):
 
     assert os.path.exists(output)
     assert os.path.isdir(output)
+
+
+def test_rocksdb_v0_9_5(runtmp):
+    # there was a RevIndex format change between this plugin v0.9.5 and
+    # v0.9.12; test that databases can be opened etc.
+
+    rocksdb_dir = get_test_data("rocksdb/podar-ref-subset.branch0_9_5.rocksdb")
+    rocksdb_zip = get_test_data("rocksdb/podar-ref-subset.sig.zip")
+
+    target_rocksdb = runtmp.output("podar-ref-subset.branch0_9_5.rocksdb")
+    target_zip = runtmp.output("podar-ref-subset.sig.zip")
+    shutil.copytree(rocksdb_dir, runtmp.output(target_rocksdb))
+    shutil.copyfile(rocksdb_zip, target_zip)
+
+    # fails b/c Column family not found: storage
+    with pytest.raises(utils.SourmashCommandFailed):
+        runtmp.sourmash(
+            "scripts",
+            "check",
+            "podar-ref-subset.branch0_9_5.rocksdb",
+            in_dir=runtmp.output(""),
+        )
+
+    # upgrade with 'check'
+    runtmp.sourmash(
+        "scripts",
+        "check",
+        "--upgrade",
+        "podar-ref-subset.branch0_9_5.rocksdb",
+        in_dir=runtmp.output(""),
+    )
+
+    # should now work...
+    runtmp.sourmash(
+        "scripts",
+        "check",
+        "podar-ref-subset.branch0_9_5.rocksdb",
+        in_dir=runtmp.output(""),
+    )

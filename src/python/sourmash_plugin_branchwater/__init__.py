@@ -405,11 +405,19 @@ class Branchwater_Check(CommandLinePlugin):
         super().__init__(p)
         p.add_argument("index", help="RocksDB index file created with 'index'")
         p.add_argument("--quick", action="store_true")
+        p.add_argument(
+            "--writable",
+            "--upgrade",
+            action="store_true",
+            help="open database in read-write mode to upgrade the internal format if needed",
+        )
 
     def main(self, args):
         notify(f"checking index '{args.index}'")
         super().main(args)
-        status = sourmash_plugin_branchwater.do_check(args.index, args.quick)
+        status = sourmash_plugin_branchwater.do_check(
+            args.index, args.quick, args.writable
+        )
         if status == 0:
             notify(f"...index is ok!")
         return status
