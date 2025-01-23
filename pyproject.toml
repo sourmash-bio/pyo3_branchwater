@@ -34,6 +34,7 @@ manysketch = "sourmash_plugin_branchwater:Branchwater_Manysketch"
 pairwise = "sourmash_plugin_branchwater:Branchwater_Pairwise"
 cluster = "sourmash_plugin_branchwater:Branchwater_Cluster"
 singlesketch = "sourmash_plugin_branchwater:Branchwater_SingleSketch"
+fastagather = "sourmash_plugin_branchwater:Branchwater_Fastagather"
 
 [project.optional-dependencies]
 test = [

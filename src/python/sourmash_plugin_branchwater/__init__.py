@@ -833,3 +833,88 @@ class Branchwater_Cluster(CommandLinePlugin):
             notify(f"...clustering is done! results in '{args.output}'")
             notify(f"                       cluster counts in '{args.cluster_sizes}'")
         return status
+
+
+class Branchwater_Fastagather(CommandLinePlugin):
+    command = "fastagather"
+    description = "massively parallel gather directly from FASTA"
+
+    def __init__(self, p):
+        super().__init__(p)
+        p.add_argument("query_fa", help="FASTA file")
+        p.add_argument("against_paths", help="database file of sketches")
+        p.add_argument(
+            "-I",
+            "--input-moltype",
+            "--input-molecule-type",
+            choices=["DNA", "dna", "protein"],
+            default="DNA",
+            help="molecule type of input sequence (DNA or protein)",
+        )
+        p.add_argument(
+            "-o",
+            "--output-gather",
+            required=True,
+            help="save gather output (minimum metagenome cover) to this file",
+        )
+        p.add_argument(
+            "-t",
+            "--threshold-hashes",
+            default=4,
+            type=float,
+            help="threshold in hashes, for reporting matches (default: 4)",
+        )
+        p.add_argument(
+            "-k",
+            "--ksize",
+            default=31,
+            type=int,
+            help="k-mer size at which to do comparisons (default: 31)",
+        )
+        p.add_argument(
+            "-s",
+            "--scaled",
+            default=1000,
+            type=int,
+            help="scaled factor at which to do comparisons (default: 10)",
+        )
+        p.add_argument(
+            "-m",
+            "--moltype",
+            default="DNA",
+            choices=["DNA", "protein", "dayhoff", "hp"],
+            help="molecule type for search (DNA, protein, dayhoff, hp, skipm1n3, or skipm2n3; default DNA)",
+        )
+        p.add_argument(
+            "-c",
+            "--cores",
+            default=0,
+            type=int,
+            help="number of cores to use (default is all available)",
+        )
+
+    def main(self, args):
+        print_version()
+        notify(
+            f"ksize: {args.ksize} / scaled: {args.scaled} / moltype: {args.moltype} / threshold hashes: {args.threshold_hashes}"
+        )
+
+        num_threads = set_thread_pool(args.cores)
+
+        notify(
+            f"gathering all sketches in '{args.query_fa}' against '{args.against_paths}' using {num_threads} threads"
+        )
+        super().main(args)
+        status = sourmash_plugin_branchwater.do_fastagather(
+            args.query_fa,
+            args.against_paths,
+            args.input_moltype,
+            int(args.threshold_hashes),
+            args.ksize,
+            args.scaled,
+            args.moltype,
+            args.output_gather,
+        )
+        if status == 0:
+            notify(f"...fastgather is done! gather results in '{args.output_gather}'")
+        return status

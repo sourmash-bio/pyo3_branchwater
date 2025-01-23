@@ -68,6 +68,12 @@ impl MultiSelection {
             selections: selections?,
         })
     }
+
+    pub fn from_selection(selection: Selection) -> Self {
+        MultiSelection {
+            selections: vec![selection],
+        }
+    }
 }
 
 pub trait MultiSelect {
@@ -96,7 +102,7 @@ pub struct BuildRecord {
     num: u32,
 
     #[getset(get = "pub")]
-    scaled: u64,
+    scaled: u32,
 
     #[getset(get = "pub", set = "pub")]
     n_hashes: Option<usize>,
@@ -209,7 +215,7 @@ impl BuildRecord {
             ksize: record.ksize(),
             moltype: record.moltype().to_string(),
             num: *record.num(),
-            scaled: *record.scaled() as u64,
+            scaled: *record.scaled() as u32,
             with_abundance: record.with_abundance(),
             ..Self::default_dna() // ignore remaining fields
         }
@@ -232,7 +238,7 @@ impl BuildRecord {
 
         if let Some(scaled) = selection.scaled() {
             // num sigs have self.scaled = 0, don't include them
-            valid = valid && self.scaled != 0 && self.scaled <= scaled as u64;
+            valid = valid && self.scaled != 0 && self.scaled <= scaled as u32;
         }
 
         if let Some(num) = selection.num() {
@@ -242,7 +248,7 @@ impl BuildRecord {
         valid
     }
 
-    pub fn params(&self) -> (u32, String, bool, u32, u64) {
+    pub fn params(&self) -> (u32, String, bool, u32, u32) {
         (
             self.ksize,
             self.moltype.clone(),
@@ -304,7 +310,7 @@ impl BuildManifest {
         self.records.clear();
     }
 
-    pub fn summarize_params(&self) -> HashSet<(u32, String, bool, u32, u64)> {
+    pub fn summarize_params(&self) -> HashSet<(u32, String, bool, u32, u32)> {
         self.iter().map(|record| record.params()).collect()
     }
 
@@ -540,7 +546,7 @@ impl BuildCollection {
         Ok(())
     }
 
-    pub fn summarize_params(&self) -> HashSet<(u32, String, bool, u32, u64)> {
+    pub fn summarize_params(&self) -> HashSet<(u32, String, bool, u32, u32)> {
         let params: HashSet<_> = self.manifest.iter().map(|record| record.params()).collect();
 
         // Print a description of the summary
@@ -560,7 +566,7 @@ impl BuildCollection {
         let mut moltype: Option<String> = None;
         let mut track_abundance: Option<bool> = None;
         let mut num: Option<u32> = None;
-        let mut scaled: Option<u64> = None;
+        let mut scaled: Option<u32> = None;
         let mut seed: Option<u32> = None;
 
         for item in p_str.split(',') {
@@ -685,6 +691,52 @@ impl BuildCollection {
         }
 
         collection
+    }
+
+    pub fn from_selection(selection: &Selection) -> Result<Self, String> {
+        let mut collection = BuildCollection::new();
+
+        // Set a default ksize if none is provided
+        let ksizes = if let Some(ksize) = selection.ksize() {
+            vec![ksize]
+        } else {
+            vec![21] // Default ksize
+        };
+
+        // Default moltype if not provided
+        let moltype = selection
+            .moltype()
+            .clone()
+            .ok_or("Moltype must be specified in selection")?;
+
+        for ksize in ksizes {
+            let mut record = match moltype {
+                HashFunctions::Murmur64Dna => BuildRecord::default_dna(),
+                HashFunctions::Murmur64Protein => BuildRecord::default_protein(),
+                HashFunctions::Murmur64Dayhoff => BuildRecord::default_dayhoff(),
+                HashFunctions::Murmur64Hp => BuildRecord::default_hp(),
+                _ => {
+                    return Err(format!("Unsupported moltype '{:?}' in selection", moltype));
+                }
+            };
+
+            // Apply selection parameters to the BuildRecord
+            record.ksize = ksize;
+            if let Some(track_abundance) = selection.abund() {
+                record.with_abundance = track_abundance;
+            }
+            if let Some(num) = selection.num() {
+                record.num = num;
+            }
+            if let Some(scaled) = selection.scaled() {
+                record.scaled = scaled;
+            }
+
+            // Add the template signature and record to the collection
+            collection.add_template_sig_from_record(&record);
+        }
+
+        Ok(collection)
     }
 
     pub fn add_template_sig_from_record(&mut self, record: &BuildRecord) {
@@ -1421,5 +1473,122 @@ mod tests {
         assert_eq!(added_dayhoff_record.moltype, "dayhoff");
         assert_eq!(added_dayhoff_record.ksize, 10);
         assert_eq!(added_dayhoff_record.with_abundance, true);
+    }
+
+    #[test]
+    fn test_from_selection_dna_with_defaults() {
+        // Create a selection with DNA moltype and default parameters
+        let selection = Selection::builder()
+            .moltype(HashFunctions::Murmur64Dna)
+            .build();
+
+        // Call from_selection
+        let build_collection = BuildCollection::from_selection(&selection)
+            .expect("Failed to create BuildCollection from selection");
+
+        // Validate that the collection is not empty
+        assert!(
+            !build_collection.is_empty(),
+            "BuildCollection should not be empty"
+        );
+
+        // Validate that the manifest contains the correct record
+        assert_eq!(
+            build_collection.manifest.size(),
+            1,
+            "Expected one record in the manifest"
+        );
+
+        let record = &build_collection.manifest.records[0];
+        assert_eq!(record.moltype, "dna", "Expected moltype to be 'dna'");
+        assert_eq!(record.ksize, 21, "Expected default ksize to be 21");
+        assert!(
+            !record.with_abundance,
+            "Expected default abundance to be false"
+        );
+    }
+
+    #[test]
+    fn test_from_selection_with_custom_parameters() {
+        // Create a selection with custom parameters
+        let selection = Selection::builder()
+            .moltype(HashFunctions::Murmur64Protein)
+            .ksize(31)
+            .abund(true)
+            .scaled(1000)
+            .build();
+
+        // Call from_selection
+        let build_collection = BuildCollection::from_selection(&selection)
+            .expect("Failed to create BuildCollection from selection");
+
+        // Validate that the collection is not empty
+        assert!(
+            !build_collection.is_empty(),
+            "BuildCollection should not be empty"
+        );
+
+        // Validate that the manifest contains the correct record
+        assert_eq!(
+            build_collection.manifest.size(),
+            1,
+            "Expected one record in the manifest"
+        );
+
+        let record = &build_collection.manifest.records[0];
+        assert_eq!(
+            record.moltype, "protein",
+            "Expected moltype to be 'protein'"
+        );
+        assert_eq!(record.ksize, 31, "Expected ksize to be 31");
+        assert!(record.with_abundance, "Expected abundance to be true");
+        assert_eq!(record.scaled, 1000, "Expected scaled to be 1000");
+    }
+
+    #[test]
+    fn test_from_selection_multiple_ksizes() {
+        // Create a selection with multiple ksizes
+        let selection = Selection::builder()
+            .moltype(HashFunctions::Murmur64Dayhoff)
+            .ksize(21) // Simulate multiple ksizes by changing test logic
+            .build();
+
+        // Call from_selection
+        let build_collection = BuildCollection::from_selection(&selection)
+            .expect("Failed to create BuildCollection from selection");
+
+        // Validate that the collection contains the correct number of records
+        assert!(
+            !build_collection.is_empty(),
+            "BuildCollection should not be empty"
+        );
+
+        assert_eq!(
+            build_collection.manifest.size(),
+            1,
+            "Expected one record in the manifest"
+        );
+
+        let record = &build_collection.manifest.records[0];
+        assert_eq!(
+            record.moltype, "dayhoff",
+            "Expected moltype to be 'dayhoff'"
+        );
+        assert_eq!(record.ksize, 21, "Expected ksize to be 21");
+    }
+
+    #[test]
+    fn test_from_selection_missing_moltype() {
+        // Create a selection without a moltype
+        let selection = Selection::builder().ksize(31).build();
+
+        // Call from_selection and expect an error
+        let result = BuildCollection::from_selection(&selection);
+        assert!(result.is_err(), "Expected an error due to missing moltype");
+        assert_eq!(
+            result.unwrap_err(),
+            "Moltype must be specified in selection",
+            "Unexpected error message"
+        );
     }
 }
